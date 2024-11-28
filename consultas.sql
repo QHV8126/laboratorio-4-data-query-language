@@ -129,106 +129,116 @@ HAVING
 -- 4 Consultas con subconsultas y cálculos
 
 -- cliente más pedidos <--
-SELECT Usuarios.nombre
+SELECT Usuarios.nombre, SUM(Pedidos.id) AS nPedidos
 FROM Usuarios
     JOIN Clientes ON Usuarios.id = Clientes.usuarioId
     JOIN Pedidos ON Pedidos.clienteId = Clientes.id 
 GROUP BY Clientes.id
-ORDER BY SUM(Pedidos.id) DESC
+ORDER BY nPedidos DESC
 LIMIT 1;
 
+-- pedidos, total (precio*unidades) <--
+SELECT Pedidos.id, SUM(LineasPedido.precio*LineasPedido.unidades)
+FROM LineasPedido
+    JOIN Pedidos ON Pedidos.id = LineasPedido.pedidoId
+GROUP BY Pedidos.id;
 
+-- pedidos importe máx <--
+SELECT 
+    Pedidos.id, 
+    SUM(LineasPedido.unidades*LineasPedido.unidades) AS importe,
+    (
+        SELECT MAX(totales.total) as importeMax
+        FROM
+        (
+            SELECT SUM(LineasPedido.unidades*LineasPedido.unidades) as total
+            FROM Pedidos
+                JOIN LineasPedido ON Pedidos.id = LineasPedido.pedidoId
+            GROUP BY Pedidos.id
+        ) as totales
+    ) AS max
+FROM Pedidos
+    JOIN LineasPedido ON Pedidos.id = LineasPedido.pedidoId
+GROUP BY Pedidos.id
+HAVING importe = max;
 
-
-
-
-
--- inventados profesor
-
--- productos precio más caro y más barato
-SELECT *
+-- productos no vendidos <--
+SELECT Productos.nombre
 FROM Productos
-WHERE
-    precio = (SELECT MAX(Productos.precio) FROM Productos)
-    OR
-    precio = (SELECT MIN(Productos.precio) FROM Productos);
+    LEFT JOIN LineasPedido ON Productos.id = LineasPedido.productoId
+WHERE LineasPedido.productoId IS NULL;
 
--- nombre producto, precio +10% de los <50€
-SELECT Productos.nombre, 1.1*Productos.precio
-FROM Productos
-WHERE precio < 50.00;
+-- ganancias mensuales <--
+SELECT SUM(LineasPedido.unidades*LineasPedido.precio), MONTH(Pedidos.fechaRealizacion)
+FROM Pedidos
+    JOIN LineasPedido ON Pedidos.id = LineasPedido.pedidoId
+GROUP BY MONTH(Pedidos.fechaRealizacion);
 
--- nombre producto, precio +10% de los <50€ (nombres bonitos, precio rondeado)
-SELECT Productos.nombre AS Producto, ROUND(1.1*Productos.precio, 2) AS Precio
-FROM Productos
-WHERE precio < 50.00;
+-- empleado gestiona más dinero <--
+SELECT Empleados.id, SUM(LineasPedido.unidades*LineasPedido.precio) as dinero
+FROM Empleados
+    JOIN Pedidos ON Pedidos.empleadoId = Empleados.id;
+    JOIN LineasPedido ON LineasPedido.pedidoId = Pedidos.id;
+GROUP BY Empleados.id
+ORDER BY dinero DESC
+LIMIT 1;
 
--- nombre producto, precio +10% de los <50€ y los otros sin modificar
-SELECT Productos.nombre AS Producto, ROUND(1.1*Productos.precio, 2) AS Precio
-FROM Productos
-WHERE precio < 50.00
-UNION
-SELECT Productos.nombre, 1.1*Productos.precio
-FROM Productos
-WHERE precio >= 50.00;
+-- empleado >1000€ <--
+SELECT Empleados.id, SUM(LineasPedido.unidades*LineasPedido.precio) as dinero
+FROM Empleados
+    JOIN Pedidos ON Pedidos.empleadoId = Empleados.id;
+    JOIN LineasPedido ON LineasPedido.pedidoId = Pedidos.id;
+GROUP BY Empleados.id
+HAVING dinero >1000;
 
--- nombre producto, precio +10% de los <50€ y los otros sin modificar (ORDENADO)
-SELECT Productos.nombre AS Producto, ROUND(1.1*Productos.precio, 2) AS Precio
-FROM Productos
-WHERE precio < 50.00
-UNION
-SELECT Productos.nombre, 1.1*Productos.precio
-FROM Productos
-WHERE precio >= 50.00
-ORDER BY precio DESC -- o ASC;
+-- 5 pedidos mayor importe < importe medio <--
+SELECT 
+    Pedidos.id, 
+    SUM(LineasPedido.unidades*LineasPedido.precio) AS importe
+FROM Pedidos
+    JOIN LineasPedido ON LineasPedido.pedidoId = Pedidos.id;
+GROUP BY Pedidos.id
+HAVING 
+    importe < 
+    (
+        SELECT AVG(total.importe)
+        FROM (
+            SELECT SUM(LineasPedido.unidades*LineasPedido.precio) as importe
+            FROM Pedidos
+                JOIN LineasPedido ON LineasPedido.pedidoId = Pedidos.id;
+            GROUP BY Pedidos.id
+        ) as total
+    )
+ORDER BY importe DESC
+LIMIT 5;
 
--- clientes sin pedidos
-SELECT Usuarios.nombre
+-- vista importe, empleado <--
+CREATE OR REPLACE VIEW vistaPedidos AS
+SELECT 
+    Pedidos.id AS pedido,
+    SUM(LineasPedido.unidades*LineasPedido.precio) as importe, 
+    Usuarios.nombre AS empleado
 FROM Usuarios
-    JOIN Clientes ON Usuarios.id = Clientes.usuarioId
-    LEFT JOIN Pedidos ON Clientes.id = Pedidos.clienteId
-WHERE Pedidos.id IS NULL;
+    JOIN Empleados ON Empleados.usuarioId = Usuarios.id
+    JOIN Pedidos ON Pedidos.empleadoId = Empleados.id
+    JOIN LineasPedido ON LineasPedido.pedidoId = Pedidos.id
+GROUP BY Pedidos.id;
 
--- clientes con pedidos con productos > 100
-SELECT DISTINCT Clientes.id
+-- clientes piden en 3 meses distintos del último año
+-- alguno de los 3 productos más vendidos de los últimos 5 años
+SELECT Clientes.id
 FROM Clientes
     JOIN Pedidos ON Clientes.id = Pedidos.clienteId
-    JOIN LineasPedido ON LineasPedido.pedidoId = Pedidos.id
-WHERE LineasPedido.precio >= 100;
-
--- empleados con salario > salario medio
-SELECT *
-FROM Empleados
-WHERE salario >= (SELECT AVG(Empleados.salario) FROM Empleados);
-
--- clientes nacidos este mes (fecha parseada)
-SELECT Usuarios.nombre, Clientes.direccionEnvio, DATE_FORMAT(Clientes.fechaNacimiento, "%d-%m-%Y")
-FROM Usuarios
-    JOIN Clientes ON Clientes.usuarioId = Usuarios.id
-WHERE MONTH(Clientes.fechaNacimiento) = MONTH(CURDATE());
-
--- cliente, importe total (orden decreciente)
-SELECT Clientes.*, COALESCE(SUM(LineasPedido.unidades * LineasPedido.precio),0) AS importe
-FROM Clientes
-    LEFT JOIN Pedidos ON Clientes.id = Pedidos.clienteId
-    LEFT JOIN LineasPedido ON LineasPedido.pedidoId = Pedidos.id
+    JOIN LineasPedido ON Pedidos.id = LineasPedido.pedidoId
+    JOIN (
+        SELECT productoId
+        FROM LineasPedido
+            JOIN Pedidos ON LineasPedido.pedidoId = Pedidos.id
+        WHERE Pedidos.fechaRealizacion >= DATE_SUB(CURDATE(), INTERVAL 5 YEAR)
+        GROUP BY productoId
+        ORDER BY SUM(unidades) DESC
+        LIMIT 3
+    ) AS topProductos ON LineasPedido.productoId = topProductos.productoId
+WHERE Pedidos.fechaRealizacion >= DATE_FORMAT(CURDATE(), '%Y-01-01')
 GROUP BY Clientes.id
-ORDER BY importe DESC;
-
--- clientes con más de 3 pedidos
-SELECT Usuarios.nombre, COUNT(Pedidos.id) AS total
-FROM Usuarios
-	JOIN Clientes ON Clientes.usuarioId = Usuarios.id
-	JOIN Pedidos ON Clientes.id = Pedidos.clienteId
-GROUP BY Clientes.id
-HAVING total >= 3; -- el group by va con HAVING no con WHERE
-
--- unidades vendidas de cada producto
-SELECT LineasPedido.productoId, SUM(LineasPedido.unidades)
-FROM LineasPedido
-GROUP BY LineasPedido.productoId;
-
--- produtos más populares de cada tipo
-SELECT Pedidos.productoId, SUM(LineasPedido.unidades)
-FROM Pedidos
-GROUP BY LineasPedido.productoId;
+HAVING COUNT(DISTINCT DATE_FORMAT(Pedidos.fechaRealizacion, '%Y-%m')) >= 3;
